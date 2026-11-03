@@ -4217,7 +4217,11 @@ struct DayDetailView: View {
     @Query private var daySleep: [SleepLog]
     @Query private var dayExpenses: [Expense]
     @Query private var dayDeposits: [GoalDeposit]
+    @Query(sort: \SurfBreak.addedAt) private var breaks: [SurfBreak]
 
+    @State private var surf: [String: SurfDay] = [:]
+    @State private var surfLoading = true
+    @State private var surfNote: String?
     @State private var weather: DayWeather?
     @State private var weatherNote: String?
     @State private var weatherLoading = true
@@ -4267,9 +4271,9 @@ struct DayDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 header
+                healthSnapshot
                 journalSnapshot
                 reportsSnapshot
-                healthSnapshot
                 financeSnapshot
                 Text("Tap a card to see more.")
                     .font(.caption)
@@ -4281,6 +4285,7 @@ struct DayDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadWeather() }
         .task(id: watchItems.map(\.symbol)) { await loadMarkets() }
+        .task(id: breaks.map(\.name)) { await loadSurf() }
     }
 
     private var header: some View {
@@ -4366,6 +4371,11 @@ struct DayDetailView: View {
         SnapshotCard("Reports", systemImage: "chart.bar.doc.horizontal", isExpanded: isOpen("reports")) {
             VStack(alignment: .leading, spacing: 4) {
                 SummaryLine(left: weatherSummary, right: marketSummary)
+                if let best = bestSurf {
+                    Label("Surf \(surfHeight(best.day)) at \(best.spot.name) · \(ratingLabel(best.day.rating(for: best.spot)))",
+                          systemImage: "water.waves")
+                        .font(.caption.weight(.semibold))
+                }
                 Label(countText(dayNews.count, "highlighted headline", "highlighted headlines"),
                       systemImage: dayNews.isEmpty ? "square" : "checkmark.square.fill")
                     .font(.caption)
@@ -4414,6 +4424,23 @@ struct DayDetailView: View {
                         HStack(alignment: .top, spacing: 8) {
                             Image(systemName: "checkmark.square.fill").padding(.top, 9)
                             headlineRow(item)
+                        }
+                    }
+                }
+
+                // Surf at your breaks
+                if !breaks.isEmpty {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Surf").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        if surfLoading && surf.isEmpty {
+                            ProgressView().padding(.top, 4)
+                        } else if surf.isEmpty {
+                            Text(surfNote ?? "Surf data isn't available for this day.")
+                                .font(.subheadline).foregroundStyle(.secondary).padding(.top, 4)
+                        } else {
+                            ForEach(breaks) { spot in
+                                if let d = surf[spot.name] { surfRow(spot, d) }
+                            }
                         }
                     }
                 }
@@ -4587,6 +4614,74 @@ struct DayDetailView: View {
         } catch {
             weatherNote = "Couldn't load the weather. Check your connection and try again."
         }
+    }
+
+    private var bestSurf: (spot: SurfBreak, day: SurfDay)? {
+        breaks.compactMap { b in surf[b.name].map { (spot: b, day: $0) } }
+            .max { $0.day.rating(for: $0.spot) < $1.day.rating(for: $1.spot) }
+    }
+
+    private func surfHeight(_ d: SurfDay) -> String {
+        guard let m = d.swellHeight ?? d.waveHeight else { return "–" }
+        return "\(m.formatted(.number.precision(.fractionLength(1)))) m"
+    }
+
+    private func surfRow(_ spot: SurfBreak, _ d: SurfDay) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                Text(spot.name).font(.subheadline.weight(.medium)).lineLimit(1)
+                RatingBars(value: d.rating(for: spot), small: true)
+                Spacer()
+                Text(surfHeight(d)).font(.subheadline.weight(.semibold).monospacedDigit())
+                if let p = d.swellPeriod {
+                    Text("\(Int(p.rounded()))s").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+                if let from = d.swellFrom {
+                    HStack(spacing: 2) { WindArrow(degrees: from); Text(Compass.label(from)) }.font(.caption)
+                }
+            }
+            HStack(spacing: 4) {
+                Image(systemName: "wind")
+                if let speed = d.morningWind, let from = d.morningWindFrom {
+                    Text("Dawn \(Compass.label(from)) \(Int(speed.rounded())) km/h")
+                    if let kind = d.windKind(for: spot) { Text("· \(kind.rawValue)") }
+                } else {
+                    Text("Dawn wind –")
+                }
+                if let t = d.waterTemp { Text("· Water \(Int(t.rounded()))°C") }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 7)
+    }
+
+    private func loadSurf() async {
+        surfLoading = true
+        defer { surfLoading = false }
+        surfNote = nil
+        guard !breaks.isEmpty else { surf = [:]; return }
+        let ahead = cal.dateComponents([.day], from: cal.startOfDay(for: .now), to: day).day ?? 0
+        guard ahead <= 6 else {
+            surf = [:]
+            surfNote = "The surf forecast reaches about a week ahead."
+            return
+        }
+        let spots = breaks.map { (name: $0.name, lat: $0.latitude, lon: $0.longitude) }
+        let target = day
+        let found = await withTaskGroup(of: (String, SurfDay?).self) { group -> [String: SurfDay] in
+            for s in spots {
+                group.addTask {
+                    let days = try? await SurfService.fetch(latitude: s.lat, longitude: s.lon, day: target)
+                    return (s.name, days?.first)
+                }
+            }
+            var result: [String: SurfDay] = [:]
+            for await (name, d) in group { if let d { result[name] = d } }
+            return result
+        }
+        surf = found
+        if found.isEmpty { surfNote = "Surf data isn't available for this day." }
     }
 
     private func loadMarkets() async {
@@ -4938,16 +5033,21 @@ enum SurfService {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
-    private static func marine(lat: Double, lon: Double) async throws -> Marine {
+    /// Date range items: one day (yyyy-MM-dd) or the next 7 days.
+    private static func range(_ dayKey: String?) -> [URLQueryItem] {
+        if let dayKey { return [.init(name: "start_date", value: dayKey), .init(name: "end_date", value: dayKey)] }
+        return [.init(name: "forecast_days", value: "7")]
+    }
+
+    private static func marine(lat: Double, lon: Double, day dayKey: String?) async throws -> Marine {
         try await get(Marine.self, "https://marine-api.open-meteo.com/v1/marine", [
             .init(name: "latitude", value: String(lat)),
             .init(name: "longitude", value: String(lon)),
             .init(name: "daily", value: "wave_height_max,swell_wave_height_max,swell_wave_period_max,swell_wave_direction_dominant,wind_wave_height_max"),
             .init(name: "hourly", value: "sea_surface_temperature"),
             .init(name: "cell_selection", value: "sea"),
-            .init(name: "timezone", value: "Australia/Brisbane"),
-            .init(name: "forecast_days", value: "7")
-        ])
+            .init(name: "timezone", value: "Australia/Brisbane")
+        ] + range(dayKey))
     }
 
     /// Average speed and vector-averaged direction for the given hours of each day.
@@ -4973,23 +5073,35 @@ enum SurfService {
     }
 
     static func fetch(for spot: SurfBreak) async throws -> [SurfDay] {
+        try await fetch(latitude: spot.latitude, longitude: spot.longitude)
+    }
+
+    /// The next 7 days, or just `day` (any date up to a week ahead) for the calendar's daily report.
+    static func fetch(latitude: Double, longitude: Double, day: Date? = nil) async throws -> [SurfDay] {
+        let keyFormatter = DateFormatter()
+        keyFormatter.dateFormat = "yyyy-MM-dd"
+        keyFormatter.locale = Locale(identifier: "en_US_POSIX")
+        keyFormatter.timeZone = TimeZone(identifier: "Australia/Brisbane")
+        let dayKey = day.map { keyFormatter.string(from: $0) }
+
         // Coastal points can land on a land grid cell; nudge out to sea (east, in SE QLD) if the forecast comes back empty.
-        var sea = try await marine(lat: spot.latitude, lon: spot.longitude)
+        var sea = try await marine(lat: latitude, lon: longitude, day: dayKey)
         for nudge in [0.06, 0.15] {
             let empty = (sea.daily.swell_wave_height_max ?? []).allSatisfy { $0 == nil }
                 && (sea.daily.wave_height_max ?? []).allSatisfy { $0 == nil }
             guard empty else { break }
-            sea = try await marine(lat: spot.latitude, lon: spot.longitude + nudge)
+            sea = try await marine(lat: latitude, lon: longitude + nudge, day: dayKey)
         }
 
-        let wind = try? await get(Wind.self, "https://api.open-meteo.com/v1/forecast", [
-            .init(name: "latitude", value: String(spot.latitude)),
-            .init(name: "longitude", value: String(spot.longitude)),
+        // Older dates come from the weather archive
+        let isOld = day.map { $0 < Date.now.addingTimeInterval(-60 * 86400) } ?? false
+        let wind = try? await get(Wind.self, isOld ? "https://archive-api.open-meteo.com/v1/archive" : "https://api.open-meteo.com/v1/forecast", [
+            .init(name: "latitude", value: String(latitude)),
+            .init(name: "longitude", value: String(longitude)),
             .init(name: "hourly", value: "wind_speed_10m,wind_direction_10m"),
             .init(name: "timezone", value: "Australia/Brisbane"),
-            .init(name: "forecast_days", value: "7"),
             .init(name: "wind_speed_unit", value: "kmh")
-        ])
+        ] + range(dayKey))
         let morning = wind.map { windWindow($0.hourly, hours: 5..<9) } ?? [:]
         let afternoon = wind.map { windWindow($0.hourly, hours: 13..<17) } ?? [:]
 
