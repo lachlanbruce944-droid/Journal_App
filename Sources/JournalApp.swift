@@ -40,7 +40,7 @@ struct JournalApp: App {
             RootView()
                 .tint(.primary)   // black and white theme: black in light mode, white in dark mode
         }
-        .modelContainer(for: [JournalEntry.self, NewsFeed.self, SavedHeadline.self, UserProfile.self, WatchItem.self,
+        .modelContainer(for: [JournalEntry.self, NewsFeed.self, SavedHeadline.self, UserProfile.self, WatchItem.self, SurfBreak.self,
                          Note.self, Reminder.self, Meal.self, SleepLog.self,
                          BankAccount.self, SavingsGoal.self, GoalDeposit.self, Expense.self]) // all saved on-device
     }
@@ -365,7 +365,7 @@ struct EntryEditorView: View {
 
 #Preview {
     RootView()
-        .modelContainer(for: [JournalEntry.self, NewsFeed.self, SavedHeadline.self, UserProfile.self, WatchItem.self,
+        .modelContainer(for: [JournalEntry.self, NewsFeed.self, SavedHeadline.self, UserProfile.self, WatchItem.self, SurfBreak.self,
                          Note.self, Reminder.self, Meal.self, SleepLog.self,
                          BankAccount.self, SavingsGoal.self, GoalDeposit.self, Expense.self], inMemory: true)
 }
@@ -1507,9 +1507,23 @@ struct WeatherView: View {
     @State private var loadedAt: Date?
     @State private var expandedDay: String?
     @State private var showingProfile = false
+    @State private var mode = "forecast"
 
     var body: some View {
-        Group {   // sits inside its category tab's NavigationStack
+        VStack(spacing: 0) {   // sits inside its category tab's NavigationStack
+            MonoSegment(options: [("forecast", "Forecast"), ("surf", "Surf")], selection: $mode)
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+            if mode == "surf" {
+                SurfView()
+            } else {
+                forecastSection
+            }
+        }
+    }
+
+    private var forecastSection: some View {
+        Group {
             Group {
                 if let profile = profiles.first, let lat = profile.latitude, let lon = profile.longitude {
                     if AustraliaRegion.contains(latitude: lat, longitude: lon) {
@@ -4574,5 +4588,746 @@ enum SunTimes {
     static func isNight(at date: Date, latitude: Double?, longitude: Double?) -> Bool {
         let t = times(on: date, latitude: latitude, longitude: longitude)
         return date < t.sunrise || date >= t.sunset
+    }
+}
+
+// MARK: - Weather › Surf (South East Queensland swell forecast)
+
+/// A surf break you follow. Offshore wind and best swell are compass bearings the wind/swell come FROM.
+@Model
+final class SurfBreak {
+    var name: String
+    var area: String
+    var latitude: Double
+    var longitude: Double
+    var offshoreFrom: Double
+    var bestSwellFrom: Double
+    var isCustom: Bool
+    var addedAt: Date
+
+    init(name: String, area: String, latitude: Double, longitude: Double,
+         offshoreFrom: Double, bestSwellFrom: Double, isCustom: Bool = false, addedAt: Date = .now) {
+        self.name = name
+        self.area = area
+        self.latitude = latitude
+        self.longitude = longitude
+        self.offshoreFrom = offshoreFrom
+        self.bestSwellFrom = bestSwellFrom
+        self.isCustom = isCustom
+        self.addedAt = addedAt
+    }
+}
+
+struct BreakPreset: Identifiable {
+    let name: String
+    let area: String
+    let latitude: Double
+    let longitude: Double
+    let offshoreFrom: Double
+    let bestSwellFrom: Double
+    var id: String { name }
+}
+
+struct BreakGroup: Identifiable {
+    let title: String
+    let breaks: [BreakPreset]
+    var id: String { title }
+}
+
+enum SEQLD {
+    /// Rough box around South East Queensland's coast, from the NSW border to Noosa.
+    static func contains(latitude: Double, longitude: Double) -> Bool {
+        (-28.3 ... -25.8).contains(latitude) && (152.6 ... 153.7).contains(longitude)
+    }
+
+    static let searchRegion = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: -27.1, longitude: 153.2),
+        span: MKCoordinateSpan(latitudeDelta: 2.6, longitudeDelta: 1.2))
+
+    /// Approximate positions and orientations. Ratings are a rough guide, not local knowledge.
+    static let groups: [BreakGroup] = [
+        BreakGroup(title: "Gold Coast", breaks: [
+            BreakPreset(name: "Snapper Rocks", area: "Coolangatta", latitude: -28.1625, longitude: 153.5500, offshoreFrom: 200, bestSwellFrom: 120),
+            BreakPreset(name: "Greenmount", area: "Coolangatta", latitude: -28.1650, longitude: 153.5430, offshoreFrom: 200, bestSwellFrom: 120),
+            BreakPreset(name: "Kirra", area: "Coolangatta", latitude: -28.1670, longitude: 153.5250, offshoreFrom: 210, bestSwellFrom: 120),
+            BreakPreset(name: "Currumbin Alley", area: "Currumbin", latitude: -28.1300, longitude: 153.4870, offshoreFrom: 200, bestSwellFrom: 120),
+            BreakPreset(name: "Palm Beach", area: "Palm Beach", latitude: -28.1150, longitude: 153.4700, offshoreFrom: 270, bestSwellFrom: 100),
+            BreakPreset(name: "Burleigh Heads", area: "Burleigh Heads", latitude: -28.0890, longitude: 153.4550, offshoreFrom: 200, bestSwellFrom: 120),
+            BreakPreset(name: "Miami", area: "Miami", latitude: -28.0720, longitude: 153.4430, offshoreFrom: 260, bestSwellFrom: 100),
+            BreakPreset(name: "Nobby Beach", area: "Mermaid Beach", latitude: -28.0640, longitude: 153.4410, offshoreFrom: 260, bestSwellFrom: 100),
+            BreakPreset(name: "Mermaid Beach", area: "Mermaid Beach", latitude: -28.0460, longitude: 153.4380, offshoreFrom: 260, bestSwellFrom: 100),
+            BreakPreset(name: "Surfers Paradise", area: "Surfers Paradise", latitude: -28.0000, longitude: 153.4310, offshoreFrom: 260, bestSwellFrom: 100),
+            BreakPreset(name: "Main Beach", area: "Main Beach", latitude: -27.9750, longitude: 153.4300, offshoreFrom: 260, bestSwellFrom: 100),
+            BreakPreset(name: "The Spit", area: "Main Beach", latitude: -27.9580, longitude: 153.4280, offshoreFrom: 250, bestSwellFrom: 110)
+        ]),
+        BreakGroup(title: "Brisbane bay islands", breaks: [
+            BreakPreset(name: "Cylinder Beach", area: "North Stradbroke Island", latitude: -27.4250, longitude: 153.5270, offshoreFrom: 180, bestSwellFrom: 130),
+            BreakPreset(name: "Point Lookout Main Beach", area: "North Stradbroke Island", latitude: -27.4400, longitude: 153.5450, offshoreFrom: 290, bestSwellFrom: 110),
+            BreakPreset(name: "Woorim", area: "Bribie Island", latitude: -27.0710, longitude: 153.2050, offshoreFrom: 270, bestSwellFrom: 80)
+        ]),
+        BreakGroup(title: "Sunshine Coast", breaks: [
+            BreakPreset(name: "Kings Beach", area: "Caloundra", latitude: -26.8020, longitude: 153.1420, offshoreFrom: 290, bestSwellFrom: 130),
+            BreakPreset(name: "Moffat Beach", area: "Caloundra", latitude: -26.7900, longitude: 153.1440, offshoreFrom: 260, bestSwellFrom: 120),
+            BreakPreset(name: "Dicky Beach", area: "Caloundra", latitude: -26.7840, longitude: 153.1380, offshoreFrom: 270, bestSwellFrom: 100),
+            BreakPreset(name: "Point Cartwright", area: "Buddina", latitude: -26.6800, longitude: 153.1390, offshoreFrom: 270, bestSwellFrom: 110),
+            BreakPreset(name: "Mooloolaba", area: "Mooloolaba", latitude: -26.6820, longitude: 153.1200, offshoreFrom: 190, bestSwellFrom: 120),
+            BreakPreset(name: "Alexandra Headland", area: "Alexandra Headland", latitude: -26.6720, longitude: 153.1100, offshoreFrom: 210, bestSwellFrom: 120),
+            BreakPreset(name: "Coolum", area: "Coolum Beach", latitude: -26.5280, longitude: 153.0910, offshoreFrom: 270, bestSwellFrom: 90),
+            BreakPreset(name: "Sunshine Beach", area: "Noosa", latitude: -26.4050, longitude: 153.1120, offshoreFrom: 270, bestSwellFrom: 90),
+            BreakPreset(name: "Granite Bay", area: "Noosa National Park", latitude: -26.3770, longitude: 153.1040, offshoreFrom: 150, bestSwellFrom: 110),
+            BreakPreset(name: "Tea Tree Bay", area: "Noosa National Park", latitude: -26.3800, longitude: 153.0970, offshoreFrom: 150, bestSwellFrom: 110),
+            BreakPreset(name: "First Point", area: "Noosa Heads", latitude: -26.3840, longitude: 153.0880, offshoreFrom: 150, bestSwellFrom: 110)
+        ])
+    ]
+
+    static var allPresets: [BreakPreset] { groups.flatMap(\.breaks) }
+
+    static func nearest(to latitude: Double, _ longitude: Double, count: Int) -> [BreakPreset] {
+        allPresets.sorted {
+            hypot($0.latitude - latitude, $0.longitude - longitude) < hypot($1.latitude - latitude, $1.longitude - longitude)
+        }.prefix(count).map { $0 }
+    }
+}
+
+/// Smallest angle between two compass bearings (0–180).
+func angleBetween(_ a: Double, _ b: Double) -> Double {
+    let d = abs((a - b).truncatingRemainder(dividingBy: 360))
+    return d > 180 ? 360 - d : d
+}
+
+enum WindKind: String { case glassy = "Glassy", offshore = "Offshore", cross = "Cross-shore", onshore = "Onshore" }
+
+struct SurfDay: Identifiable {
+    let id: String              // yyyy-MM-dd
+    let date: Date
+    let swellHeight: Double?    // metres (largest swell of the day)
+    let swellPeriod: Double?    // seconds
+    let swellFrom: Double?      // degrees
+    let waveHeight: Double?     // total sea including wind chop
+    let windWave: Double?
+    let morningWind: Double?    // km/h, 5–9 am average
+    let morningWindFrom: Double?
+    let afternoonWind: Double?  // km/h, 1–5 pm average
+    let afternoonWindFrom: Double?
+    let waterTemp: Double?
+
+    func windKind(for spot: SurfBreak) -> WindKind? {
+        guard let speed = morningWind, let from = morningWindFrom else { return nil }
+        if speed < 8 { return .glassy }
+        let off = angleBetween(from, spot.offshoreFrom)
+        if off <= 67.5 { return .offshore }
+        if off >= 112.5 { return .onshore }
+        return .cross
+    }
+
+    /// 0 (flat or blown out) to 5 (great). A rough guide built from size, period, morning wind and swell angle.
+    func rating(for spot: SurfBreak) -> Int {
+        guard let h = swellHeight ?? waveHeight else { return 0 }
+        if h < 0.3 { return 0 }
+        var score: Double
+        switch h {
+        case ..<0.5: score = 1
+        case ..<0.9: score = 2
+        case ..<1.5: score = 3
+        case ..<2.5: score = 3.5
+        default: score = 3
+        }
+        if let p = swellPeriod { score += p >= 11 ? 1 : p >= 9 ? 0.5 : p < 7 ? -1 : 0 }
+        if let from = swellFrom {
+            let d = angleBetween(from, spot.bestSwellFrom)
+            score += d <= 45 ? 0.5 : d > 100 ? -1 : 0
+        }
+        if let kind = windKind(for: spot) {
+            let speed = morningWind ?? 0
+            switch kind {
+            case .glassy: score += 1
+            case .offshore: score += speed > 30 ? 0 : 1
+            case .cross: score -= speed > 20 ? 1 : 0
+            case .onshore: score -= speed > 15 ? 2 : 1
+            }
+        }
+        return max(0, min(5, Int(score.rounded())))
+    }
+}
+
+func ratingLabel(_ r: Int) -> String {
+    ["Flat", "Poor", "Poor to fair", "Fair", "Good", "Great"][max(0, min(5, r))]
+}
+
+enum SurfService {
+    private struct Marine: Decodable {
+        struct Daily: Decodable {
+            let time: [String]
+            let wave_height_max: [Double?]?
+            let swell_wave_height_max: [Double?]?
+            let swell_wave_period_max: [Double?]?
+            let swell_wave_direction_dominant: [Double?]?
+            let wind_wave_height_max: [Double?]?
+        }
+        struct Hourly: Decodable {
+            let time: [String]
+            let sea_surface_temperature: [Double?]?
+        }
+        let daily: Daily
+        let hourly: Hourly?
+    }
+
+    private struct Wind: Decodable {
+        struct Hourly: Decodable {
+            let time: [String]
+            let wind_speed_10m: [Double?]
+            let wind_direction_10m: [Double?]
+        }
+        let hourly: Hourly
+    }
+
+    private static func get<T: Decodable>(_ type: T.Type, _ base: String, _ items: [URLQueryItem]) async throws -> T {
+        var components = URLComponents(string: base)!
+        components.queryItems = items
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 15
+        let (data, _) = try await URLSession.shared.data(for: request)
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    private static func marine(lat: Double, lon: Double) async throws -> Marine {
+        try await get(Marine.self, "https://marine-api.open-meteo.com/v1/marine", [
+            .init(name: "latitude", value: String(lat)),
+            .init(name: "longitude", value: String(lon)),
+            .init(name: "daily", value: "wave_height_max,swell_wave_height_max,swell_wave_period_max,swell_wave_direction_dominant,wind_wave_height_max"),
+            .init(name: "hourly", value: "sea_surface_temperature"),
+            .init(name: "cell_selection", value: "sea"),
+            .init(name: "timezone", value: "Australia/Brisbane"),
+            .init(name: "forecast_days", value: "7")
+        ])
+    }
+
+    /// Average speed and vector-averaged direction for the given hours of each day.
+    private static func windWindow(_ w: Wind.Hourly, hours: Range<Int>) -> [String: (speed: Double, from: Double)] {
+        var acc: [String: (s: Double, x: Double, y: Double, n: Double)] = [:]
+        for i in w.time.indices {
+            let t = w.time[i]
+            guard t.count >= 13, let hour = Int(t.dropFirst(11).prefix(2)), hours.contains(hour),
+                  let speed = w.wind_speed_10m[safe: i] ?? nil, let dir = w.wind_direction_10m[safe: i] ?? nil else { continue }
+            let key = String(t.prefix(10))
+            var a = acc[key] ?? (0, 0, 0, 0)
+            a.s += speed
+            a.x += sin(dir * .pi / 180)
+            a.y += cos(dir * .pi / 180)
+            a.n += 1
+            acc[key] = a
+        }
+        return acc.mapValues { a in
+            var deg = atan2(a.x, a.y) * 180 / .pi
+            if deg < 0 { deg += 360 }
+            return (a.s / a.n, deg)
+        }
+    }
+
+    static func fetch(for spot: SurfBreak) async throws -> [SurfDay] {
+        // Coastal points can land on a land grid cell; nudge out to sea (east, in SE QLD) if the forecast comes back empty.
+        var sea = try await marine(lat: spot.latitude, lon: spot.longitude)
+        for nudge in [0.06, 0.15] {
+            let empty = (sea.daily.swell_wave_height_max ?? []).allSatisfy { $0 == nil }
+                && (sea.daily.wave_height_max ?? []).allSatisfy { $0 == nil }
+            guard empty else { break }
+            sea = try await marine(lat: spot.latitude, lon: spot.longitude + nudge)
+        }
+
+        let wind = try? await get(Wind.self, "https://api.open-meteo.com/v1/forecast", [
+            .init(name: "latitude", value: String(spot.latitude)),
+            .init(name: "longitude", value: String(spot.longitude)),
+            .init(name: "hourly", value: "wind_speed_10m,wind_direction_10m"),
+            .init(name: "timezone", value: "Australia/Brisbane"),
+            .init(name: "forecast_days", value: "7"),
+            .init(name: "wind_speed_unit", value: "kmh")
+        ])
+        let morning = wind.map { windWindow($0.hourly, hours: 5..<9) } ?? [:]
+        let afternoon = wind.map { windWindow($0.hourly, hours: 13..<17) } ?? [:]
+
+        // Daily water temperature: mean of the hourly values
+        var water: [String: (sum: Double, n: Double)] = [:]
+        if let h = sea.hourly, let temps = h.sea_surface_temperature {
+            for i in h.time.indices {
+                guard let v = temps[safe: i] ?? nil else { continue }
+                let key = String(h.time[i].prefix(10))
+                let w = water[key] ?? (0, 0)
+                water[key] = (w.sum + v, w.n + 1)
+            }
+        }
+
+        let parser = DateFormatter()
+        parser.dateFormat = "yyyy-MM-dd"
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.timeZone = TimeZone(identifier: "Australia/Brisbane")
+
+        let d = sea.daily
+        return d.time.indices.compactMap { i in
+            let key = d.time[i]
+            guard let date = parser.date(from: key) else { return nil }
+            return SurfDay(id: key, date: date,
+                           swellHeight: d.swell_wave_height_max?[safe: i] ?? nil,
+                           swellPeriod: d.swell_wave_period_max?[safe: i] ?? nil,
+                           swellFrom: d.swell_wave_direction_dominant?[safe: i] ?? nil,
+                           waveHeight: d.wave_height_max?[safe: i] ?? nil,
+                           windWave: d.wind_wave_height_max?[safe: i] ?? nil,
+                           morningWind: morning[key]?.speed,
+                           morningWindFrom: morning[key]?.from,
+                           afternoonWind: afternoon[key]?.speed,
+                           afternoonWindFrom: afternoon[key]?.from,
+                           waterTemp: water[key].map { $0.sum / $0.n })
+        }
+    }
+}
+
+extension Array {
+    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
+}
+
+// MARK: Surf screen
+
+struct SurfView: View {
+    @Environment(\.modelContext) private var context
+    @Query(sort: \SurfBreak.addedAt) private var breaks: [SurfBreak]
+    @Query private var profiles: [UserProfile]
+
+    @State private var selectedName: String?
+    @State private var days: [String: [SurfDay]] = [:]
+    @State private var loadedAt: [String: Date] = [:]
+    @State private var errors: [String: String] = [:]
+    @State private var expanded: String?
+    @State private var showingBreaks = false
+
+    private var selected: SurfBreak? {
+        breaks.first { $0.name == selectedName } ?? breaks.first
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                breakChips
+                if let spot = selected {
+                    if let list = days[spot.name], !list.isEmpty {
+                        todayCard(list[0], spot: spot)
+                        weekCard(list, spot: spot)
+                    } else if let error = errors[spot.name] {
+                        ContentUnavailableView("Surf forecast unavailable", systemImage: "water.waves.slash",
+                                               description: Text(error))
+                    } else {
+                        ProgressView("Loading swell…")
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 60)
+                    }
+                    Text("Swell data by Open-Meteo.com marine forecast. Ratings are a rough guide from size, period, morning wind and swell angle. Check the beach before you paddle out.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    emptyState
+                }
+            }
+            .padding()
+        }
+        .refreshable { if let spot = selected { await load(spot, force: true) } }
+        .task(id: selected?.name) { if let spot = selected { await load(spot) } }
+        .sheet(isPresented: $showingBreaks) { ManageBreaksView().tint(.primary) }
+    }
+
+    // Break picker: one capsule per saved break, plus Add/Edit
+
+    private var breakChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(breaks) { spot in
+                    let isOn = spot.name == selected?.name
+                    Button { selectedName = spot.name } label: { Text(spot.name).lineLimit(1) }
+                        .buttonStyle(CapsuleButtonStyle(kind: isOn ? .solid : .outlined))
+                }
+                Button { showingBreaks = true } label: {
+                    Label(breaks.isEmpty ? "Add a break" : "Breaks", systemImage: breaks.isEmpty ? "plus" : "slider.horizontal.3")
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(CapsuleButtonStyle(kind: .outlined))
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Follow your local breaks")
+                .font(.title3.bold())
+            Text("Get a 7-day swell forecast for South East Queensland breaks, from Coolangatta to Noosa.")
+                .foregroundStyle(.secondary)
+            if let p = profiles.first, let lat = p.latitude, let lon = p.longitude, SEQLD.contains(latitude: lat, longitude: lon) {
+                Text("Closest to \(p.placeName)").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 4)
+                ForEach(SEQLD.nearest(to: lat, lon, count: 3)) { preset in
+                    Button { add(preset) } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(preset.name).font(.headline)
+                                Text(preset.area).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "plus.circle.fill").font(.title3)
+                        }
+                        .padding(14)
+                        .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.05)))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Button("Choose breaks") { showingBreaks = true }
+                .buttonStyle(CapsuleButtonStyle(large: true))
+                .padding(.top, 6)
+        }
+        .padding(.top, 8)
+    }
+
+    private func add(_ preset: BreakPreset) {
+        guard !breaks.contains(where: { $0.name == preset.name }) else { return }
+        context.insert(SurfBreak(name: preset.name, area: preset.area, latitude: preset.latitude, longitude: preset.longitude,
+                                 offshoreFrom: preset.offshoreFrom, bestSwellFrom: preset.bestSwellFrom))
+        selectedName = preset.name
+    }
+
+    // Today
+
+    private func todayCard(_ day: SurfDay, spot: SurfBreak) -> some View {
+        let rating = day.rating(for: spot)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(spot.name).font(.headline)
+                    Text(spot.area).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                RatingBars(value: rating)
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(heightText(day.swellHeight ?? day.waveHeight))
+                    .font(.system(size: 52, weight: .thin))
+                    .monospacedDigit()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ratingLabel(rating)).font(.title3.weight(.semibold))
+                    if let p = day.swellPeriod { Text("\(Int(p.rounded())) s period").font(.subheadline).foregroundStyle(.secondary) }
+                }
+            }
+            Divider()
+            HStack(alignment: .top) {
+                metric("Swell", day.swellFrom.map { "\(Compass.label($0)) \(Int($0.rounded()))°" } ?? "–", arrow: day.swellFrom)
+                Spacer()
+                metric("Morning wind", windText(day.morningWind, day.morningWindFrom), arrow: day.morningWindFrom)
+                Spacer()
+                metric("Water", day.waterTemp.map { "\(Int($0.rounded()))°C" } ?? "–")
+            }
+            if let kind = day.windKind(for: spot) {
+                Text("\(kind.rawValue) at dawn (5–9 am)\(day.afternoonWind.map { " · \(Int($0.rounded())) km/h \(Compass.label(day.afternoonWindFrom ?? 0)) by afternoon" } ?? "")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(20)
+        .background(RoundedRectangle(cornerRadius: 20).fill(Color.primary.opacity(0.05)))
+    }
+
+    // 7 days
+
+    private func weekCard(_ list: [SurfDay], spot: SurfBreak) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Label("7-day swell", systemImage: "water.waves")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 8)
+            ForEach(Array(list.enumerated()), id: \.element.id) { index, day in
+                if index > 0 { Divider() }
+                dayRow(day, spot: spot, isToday: index == 0)
+            }
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 20).fill(Color.primary.opacity(0.05)))
+    }
+
+    private func dayRow(_ day: SurfDay, spot: SurfBreak, isToday: Bool) -> some View {
+        let open = expanded == day.id
+        let rating = day.rating(for: spot)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Text(isToday ? "Today" : day.date.formatted(.dateTime.weekday(.abbreviated)))
+                    .font(.body.weight(.medium))
+                    .frame(width: 52, alignment: .leading)
+                RatingBars(value: rating, small: true)
+                Spacer()
+                Text(heightText(day.swellHeight ?? day.waveHeight))
+                    .font(.body.weight(.semibold).monospacedDigit())
+                Text(day.swellPeriod.map { "\(Int($0.rounded()))s" } ?? "")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, alignment: .trailing)
+                HStack(spacing: 2) {
+                    if let from = day.swellFrom { WindArrow(degrees: from) }
+                    Text(day.swellFrom.map { Compass.label($0) } ?? "")
+                }
+                .font(.caption)
+                .frame(width: 38, alignment: .trailing)
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "wind")
+                if let from = day.morningWindFrom { WindArrow(degrees: from) }
+                Text(windText(day.morningWind, day.morningWindFrom))
+                if let kind = day.windKind(for: spot) { Text("· \(kind.rawValue)") }
+                Spacer()
+                Image(systemName: "chevron.down").rotationEffect(.degrees(open ? 180 : 0))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.leading, 62)
+
+            if open {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+                    GridRow { detail("Rating", ratingLabel(rating)); detail("Total sea", heightText(day.waveHeight)) }
+                    GridRow { detail("Wind chop", heightText(day.windWave)); detail("Afternoon wind", windText(day.afternoonWind, day.afternoonWindFrom)) }
+                    GridRow { detail("Water", day.waterTemp.map { "\(Int($0.rounded()))°C" } ?? "–"); detail("Best swell here", Compass.label(spot.bestSwellFrom)) }
+                }
+                .padding(.leading, 62)
+                .padding(.top, 4)
+                .transition(.opacity)
+            }
+        }
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { expanded = open ? nil : day.id } }
+    }
+
+    private func metric(_ label: String, _ value: String, arrow: Double? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 3) {
+                if let arrow { WindArrow(degrees: arrow) }
+                Text(value).font(.subheadline.weight(.semibold))
+            }
+        }
+    }
+
+    private func detail(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(value).font(.footnote.weight(.semibold))
+        }
+    }
+
+    private func heightText(_ metres: Double?) -> String {
+        guard let m = metres else { return "–" }
+        return "\(m.formatted(.number.precision(.fractionLength(1)))) m"
+    }
+
+    private func windText(_ speed: Double?, _ from: Double?) -> String {
+        guard let speed, let from else { return "–" }
+        return "\(Compass.label(from)) \(Int(speed.rounded())) km/h"
+    }
+
+    private func load(_ spot: SurfBreak, force: Bool = false) async {
+        if !force, let at = loadedAt[spot.name], Date.now.timeIntervalSince(at) < 1800 { return }
+        errors[spot.name] = nil
+        do {
+            let result = try await SurfService.fetch(for: spot)
+            if result.allSatisfy({ $0.swellHeight == nil && $0.waveHeight == nil }) {
+                errors[spot.name] = "No swell data for this spot. Try a break a little further along the coast."
+            } else {
+                days[spot.name] = result
+                loadedAt[spot.name] = .now
+            }
+        } catch {
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled { return }
+            if days[spot.name] == nil {
+                errors[spot.name] = "Couldn't load the swell forecast. Check your connection and pull down to try again."
+            }
+        }
+    }
+}
+
+/// Five bars, filled to the rating.
+struct RatingBars: View {
+    let value: Int
+    var small = false
+
+    var body: some View {
+        HStack(spacing: small ? 2 : 3) {
+            ForEach(1...5, id: \.self) { i in
+                Capsule()
+                    .fill(i <= value ? Color.primary : Color.primary.opacity(0.12))
+                    .frame(width: small ? 5 : 7, height: small ? 12 : 18)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(ratingLabel(value)), \(value) out of 5")
+    }
+}
+
+// MARK: Manage breaks
+
+struct ManageBreaksView: View {
+    @Environment(\.modelContext) private var context
+    @Environment(\.dismiss) private var dismiss
+    @Query(sort: \SurfBreak.addedAt) private var breaks: [SurfBreak]
+
+    @State private var customName = ""
+    @State private var query = ""
+    @State private var results: [MKMapItem] = []
+    @State private var picked: MKMapItem?
+    @State private var faces: Double = 90
+    @State private var searching = false
+    @State private var error: String?
+
+    private let faceOptions: [(String, Double)] = [("N", 0), ("NE", 45), ("E", 90), ("SE", 135), ("S", 180)]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    if breaks.isEmpty {
+                        Text("No breaks yet. Add some below.").foregroundStyle(.secondary)
+                    }
+                    ForEach(breaks) { spot in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(spot.name)
+                            Text(spot.isCustom ? "\(spot.area) · your break" : spot.area)
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .onDelete { offsets in
+                        for i in offsets { context.delete(breaks[i]) }
+                    }
+                } header: {
+                    Text("Your breaks")
+                } footer: {
+                    if !breaks.isEmpty { Text("Swipe left to remove.") }
+                }
+
+                ForEach(SEQLD.groups) { group in
+                    Section(group.title) {
+                        ForEach(group.breaks) { preset in
+                            let has = breaks.contains { $0.name == preset.name }
+                            Button {
+                                if let existing = breaks.first(where: { $0.name == preset.name }) {
+                                    context.delete(existing)
+                                } else {
+                                    context.insert(SurfBreak(name: preset.name, area: preset.area, latitude: preset.latitude,
+                                                             longitude: preset.longitude, offshoreFrom: preset.offshoreFrom,
+                                                             bestSwellFrom: preset.bestSwellFrom))
+                                }
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(preset.name).fontWeight(has ? .bold : .regular)
+                                        Text(preset.area).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: has ? "checkmark.circle.fill" : "plus.circle")
+                                        .font(.title3)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                Section {
+                    TextField("Break name, e.g. Tallebudgera Creek", text: $customName)
+                        .onChange(of: customName) { error = nil }
+                    if let picked {
+                        HStack {
+                            Image(systemName: "mappin.circle.fill")
+                            Text(picked.name ?? "Selected place")
+                            Spacer()
+                            Button("Change") { self.picked = nil }.buttonStyle(.borderless)
+                        }
+                    } else {
+                        HStack {
+                            TextField("Search a beach or suburb", text: $query)
+                                .submitLabel(.search)
+                                .onSubmit { Task { await search() } }
+                                .onChange(of: query) { error = nil }
+                            Button { Task { await search() } } label: {
+                                if searching { ProgressView() } else { Image(systemName: "magnifyingglass") }
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        ForEach(results, id: \.self) { item in
+                            Button {
+                                picked = item
+                                results = []
+                                if customName.trimmingCharacters(in: .whitespaces).isEmpty { customName = item.name ?? "" }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.name ?? "Unknown place")
+                                    if let title = item.placemark.title {
+                                        Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Which way does the beach face?").font(.subheadline)
+                        MonoSegment(options: faceOptions.map { ($0.1, $0.0) }, selection: $faces)
+                    }
+                    .padding(.vertical, 4)
+                    if let error {
+                        Text(error).font(.footnote).foregroundStyle(.red)
+                    }
+                    Button("Add break") { addCustom() }
+                        .buttonStyle(CapsuleButtonStyle(large: true))
+                        .listRowBackground(Color.clear)
+                } header: {
+                    Text("Add your own break")
+                } footer: {
+                    Text("South East Queensland only, from the NSW border to Noosa. Facing direction sets which wind counts as offshore.")
+                }
+            }
+            .navigationTitle("Surf breaks")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.buttonStyle(CapsuleButtonStyle()) }
+            }
+        }
+    }
+
+    private func search() async {
+        let text = query.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { error = "Type a beach or suburb to search."; return }
+        searching = true
+        defer { searching = false }
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = text
+        request.region = SEQLD.searchRegion
+        let response = try? await MKLocalSearch(request: request).start()
+        results = Array((response?.mapItems ?? []).filter {
+            let c = $0.placemark.coordinate
+            return SEQLD.contains(latitude: c.latitude, longitude: c.longitude)
+        }.prefix(5))
+        if results.isEmpty { error = "No places found in South East Queensland. Try a nearby suburb, e.g. Tugun." }
+    }
+
+    private func addCustom() {
+        let name = customName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { error = "Give the break a name."; return }
+        guard let picked else { error = "Search for where the break is, then pick it from the list."; return }
+        guard !breaks.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+            error = "You already have a break called \(name)."
+            return
+        }
+        let c = picked.placemark.coordinate
+        let offshore = (faces + 180).truncatingRemainder(dividingBy: 360)
+        context.insert(SurfBreak(name: name, area: picked.placemark.locality ?? picked.name ?? "Custom",
+                                 latitude: c.latitude, longitude: c.longitude,
+                                 offshoreFrom: offshore, bestSwellFrom: faces, isCustom: true))
+        customName = ""
+        query = ""
+        self.picked = nil
     }
 }
