@@ -1,0 +1,39 @@
+name: Build simulator app
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build for iOS Simulator (Apple silicon)
+        run: |
+          xcodebuild \
+            -project Journal.xcodeproj \
+            -scheme Journal \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Zip the .app for Appetize
+        run: |
+          cd build/Build/Products/Debug-iphonesimulator
+          zip -qry "$GITHUB_WORKSPACE/Journal-simulator.zip" Journal.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Journal-simulator
+          path: Journal-simulator.zip
