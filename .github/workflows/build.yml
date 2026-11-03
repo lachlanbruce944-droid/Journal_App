@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-15
@@ -32,6 +35,20 @@ jobs:
         run: |
           cd build/Build/Products/Debug-iphonesimulator
           zip -qry "$GITHUB_WORKSPACE/Journal-simulator.zip" Journal.app
+
+      - name: Check the zip contains Journal.app
+        run: unzip -l Journal-simulator.zip | head -15
+
+      # The Releases page gives you Journal-simulator.zip exactly as Appetize wants it (no extra zip around it)
+      - name: Publish to the "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest Journal-simulator.zip \
+            --title "Latest simulator build" \
+            --notes "Download Journal-simulator.zip below and upload it to appetize.io as it is. Don't unzip it." \
+            --latest
 
       - uses: actions/upload-artifact@v4
         with:

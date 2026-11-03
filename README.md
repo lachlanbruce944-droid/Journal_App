@@ -11,11 +11,11 @@ then you run it in your browser with Appetize.io. No Mac needed.
    - If the `.github` folder doesn't upload: choose **Add file → Create new file**, type the
      name `.github/workflows/build.yml`, paste in the contents of that file, and commit.
 
-## 2. Let GitHub build it (about 5–10 minutes)
+## 2. Let GitHub build it (about 2–10 minutes)
 1. Open the **Actions** tab. A run called **Build simulator app** starts by itself.
    (If not, click it, then **Run workflow**.)
-2. When it shows a green tick, open the run and download **Journal-simulator** under *Artifacts*.
-3. GitHub gives you a zip that contains `Journal-simulator.zip`. Unzip the outer one only.
+2. When it shows a green tick, open **Releases** (right-hand side of the repo page) → **Latest simulator build**
+   and download **Journal-simulator.zip**. Upload that file to Appetize as it is. Don't unzip it.
 
 If the run shows a red cross, open the failed step and copy the lines starting with `error:`.
 Send those to Claude to fix.
