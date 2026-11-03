@@ -1788,6 +1788,14 @@ struct Quote: Identifiable {
     let currency: String
     let sparkline: [Double]
     let link: URL?
+    var open: Double? = nil
+    var high: Double? = nil
+    var low: Double? = nil
+    var previousClose: Double? = nil
+    var volume: Double? = nil
+    var marketCap: Double? = nil
+    var exchange: String? = nil
+    var baseline: Double? = nil      // dotted line on the chart: previous close (shares) or price 7 days ago (crypto)
 }
 
 enum MarketLists {
@@ -1832,10 +1840,27 @@ enum StockService {
             let chartPreviousClose: Double?
             let previousClose: Double?
             let currency: String?
+            let regularMarketDayHigh: Double?
+            let regularMarketDayLow: Double?
+            let regularMarketVolume: Double?
+            let exchangeName: String?
+            let fullExchangeName: String?
         }
         struct Indicators: Decodable { let quote: [QuoteData]? }
-        struct QuoteData: Decodable { let close: [Double?]? }
+        struct QuoteData: Decodable {
+            let close: [Double?]?
+            let open: [Double?]?
+            let high: [Double?]?
+            let low: [Double?]?
+            let volume: [Double?]?
+        }
         let chart: Chart
+    }
+
+    private static func exchangeLabel(_ symbol: String, _ meta: ChartResponse.Meta) -> String? {
+        if symbol.hasSuffix(".AX") || symbol == "^AXJO" || symbol == "^AORD" { return "ASX" }
+        if symbol.hasSuffix("=X") { return "FX" }
+        return meta.fullExchangeName ?? meta.exchangeName
     }
 
     static func fetch(symbol: String, name: String, kind: QuoteKind) async -> Quote? {
@@ -1852,7 +1877,11 @@ enum StockService {
         else { return nil }
 
         let previous = result.meta.chartPreviousClose ?? result.meta.previousClose ?? price
-        let closes = (result.indicators?.quote?.first?.close ?? []).compactMap { $0 }
+        let bars = result.indicators?.quote?.first
+        let closes = (bars?.close ?? []).compactMap { $0 }
+        let highs = (bars?.high ?? []).compactMap { $0 }
+        let lows = (bars?.low ?? []).compactMap { $0 }
+        let volumes = (bars?.volume ?? []).compactMap { $0 }
         let display = symbol.replacingOccurrences(of: "^", with: "")
                             .replacingOccurrences(of: ".AX", with: "")
                             .replacingOccurrences(of: "=X", with: "")
@@ -1862,7 +1891,14 @@ enum StockService {
                      changePercent: previous == 0 ? 0 : (price - previous) / previous * 100,
                      currency: result.meta.currency ?? "AUD",
                      sparkline: closes,
-                     link: URL(string: "https://finance.yahoo.com/quote/\(encoded)"))
+                     link: URL(string: "https://finance.yahoo.com/quote/\(encoded)"),
+                     open: (bars?.open ?? []).compactMap { $0 }.first,
+                     high: result.meta.regularMarketDayHigh ?? highs.max(),
+                     low: result.meta.regularMarketDayLow ?? lows.min(),
+                     previousClose: previous,
+                     volume: result.meta.regularMarketVolume ?? (volumes.isEmpty ? nil : volumes.reduce(0, +)),
+                     exchange: exchangeLabel(symbol, result.meta),
+                     baseline: previous)
     }
 
     /// Fetches a whole list at once and keeps the list's order.
@@ -1891,6 +1927,11 @@ enum CryptoService {
         let current_price: Double?
         let price_change_percentage_24h: Double?
         let sparkline_in_7d: Sparkline?
+        let high_24h: Double?
+        let low_24h: Double?
+        let total_volume: Double?
+        let market_cap: Double?
+        let market_cap_rank: Int?
     }
 
     static func fetch() async throws -> [Quote] {
@@ -1913,7 +1954,11 @@ enum CryptoService {
             return Quote(id: coin.id, name: coin.name, symbol: coin.symbol.uppercased(), kind: .crypto,
                          price: price, changePercent: coin.price_change_percentage_24h ?? 0,
                          currency: "AUD", sparkline: coin.sparkline_in_7d?.price ?? [],
-                         link: URL(string: "https://www.coingecko.com/en/coins/\(coin.id)"))
+                         link: URL(string: "https://www.coingecko.com/en/coins/\(coin.id)"),
+                         high: coin.high_24h, low: coin.low_24h,
+                         volume: coin.total_volume, marketCap: coin.market_cap,
+                         exchange: coin.market_cap_rank.map { "Rank #\($0)" },
+                         baseline: coin.sparkline_in_7d?.price?.first)
         }
     }
 }
@@ -1945,12 +1990,15 @@ struct MarketsView: View {
                     Section {
                         if let list = quotes[section], !list.isEmpty {
                             ForEach(list) { quote in
-                                if let link = quote.link {
-                                    Link(destination: link) { QuoteRow(quote: quote) }
-                                        .foregroundStyle(.primary)
-                                } else {
-                                    QuoteRow(quote: quote)
+                                Group {
+                                    if let link = quote.link {
+                                        Link(destination: link) { QuoteCard(quote: quote) }
+                                            .foregroundStyle(.primary)
+                                    } else {
+                                        QuoteCard(quote: quote)
+                                    }
                                 }
+                                .cardRow()
                             }
                         } else if let error = errors[section] {
                             ContentUnavailableView("Prices unavailable", systemImage: "chart.line.downtrend.xyaxis",
@@ -1966,10 +2014,11 @@ struct MarketsView: View {
                     } footer: {
                         Text(section == .crypto
                              ? "Prices in AUD · 7-day trend · Data provided by CoinGecko"
-                             : "Today's trend · Prices may be delayed · Data from Yahoo Finance")
+                             : "Today's trend · dotted line is yesterday's close · Prices may be delayed · Data from Yahoo Finance")
                     }
                 }
                 .listStyle(.insetGrouped)
+                .listRowSpacing(8)
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -2007,37 +2056,101 @@ struct MarketsView: View {
     }
 }
 
-struct QuoteRow: View {
+/// Market card (design B): name and exchange top left, ticker over price top right,
+/// a wide chart with a dotted line at the previous close, then four figures.
+struct QuoteCard: View {
     let quote: Quote
 
-    var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(quote.name).font(.headline).lineLimit(1)
-                Text(quote.symbol).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 8)
-            Sparkline(values: quote.sparkline)
-                .frame(width: 60, height: 26)
-            VStack(alignment: .trailing, spacing: 4) {
-                Text(formattedPrice).font(.body.monospacedDigit())
-                ChangeBadge(percent: quote.changePercent)
-            }
-            .frame(minWidth: 96, alignment: .trailing)
+    private var kindLabel: String {
+        switch quote.kind {
+        case .index: return "Index"
+        case .fx: return "Currency"
+        case .commodity: return "Commodity"
+        case .stock: return "Share"
+        case .crypto: return "Crypto"
         }
-        .padding(.vertical, 4)
     }
 
-    private var formattedPrice: String {
-        switch quote.kind {
-        case .index:
-            return quote.price.formatted(.number.precision(.fractionLength(2)))
-        case .fx:
-            return quote.price.formatted(.number.precision(.fractionLength(4)))
-        case .stock, .commodity, .crypto:
-            let decimals = quote.price < 1 ? 4 : 2
-            return quote.price.formatted(.currency(code: quote.currency).precision(.fractionLength(decimals)))
+    private var subtitle: String {
+        var parts = [quote.exchange, kindLabel].compactMap { $0 }
+        if quote.kind == .stock, let v = quote.volume { parts.append("Vol \(compact(v))") }
+        return parts.joined(separator: " · ")
+    }
+
+    private var figures: [(String, String)] {
+        let p: (Double?) -> String = { v in v.map { formatPrice($0, kind: quote.kind, currency: quote.currency) } ?? "–" }
+        if quote.kind == .crypto {
+            return [("24h high", p(quote.high)), ("24h low", p(quote.low)),
+                    ("Volume", quote.volume.map { "$" + compact($0) } ?? "–"),
+                    ("Mkt cap", quote.marketCap.map { "$" + compact($0) } ?? "–")]
         }
+        return [("Open", p(quote.open)), ("High", p(quote.high)), ("Low", p(quote.low)), ("Prev close", p(quote.previousClose))]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(quote.name)
+                        .font(.headline.weight(.bold))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text(quote.symbol)
+                        .font(.caption2.weight(.bold))
+                        .tracking(0.6)
+                        .foregroundStyle(.secondary)
+                    Text(formatPrice(quote.price, kind: quote.kind, currency: quote.currency))
+                        .font(.headline.weight(.bold).monospacedDigit())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    ChangeBadge(percent: quote.changePercent)
+                }
+                .fixedSize(horizontal: true, vertical: false)
+            }
+
+            Sparkline(values: quote.sparkline, baseline: quote.baseline, filled: true)
+                .frame(height: 48)
+                .accessibilityHidden(true)
+
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(figures.indices, id: \.self) { i in
+                    let item = figures[i]
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.0).font(.caption2).foregroundStyle(.secondary)
+                        Text(item.1)
+                            .font(.caption.weight(.semibold).monospacedDigit())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemGroupedBackground)))
+        .contentShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func compact(_ value: Double) -> String {
+        value.formatted(.number.notation(.compactName).precision(.fractionLength(1)))
+    }
+}
+
+extension View {
+    /// Lets a card sit on the list background as its own rounded tile.
+    func cardRow() -> some View {
+        self
+            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
     }
 }
 
@@ -2057,22 +2170,52 @@ struct ChangeBadge: View {
     }
 }
 
-/// Small line chart of recent prices.
+/// Line chart of recent prices, with an optional dotted reference line and soft fill.
 struct Sparkline: View {
     let values: [Double]
+    var baseline: Double? = nil
+    var filled = false
 
     var body: some View {
         GeometryReader { geo in
-            if values.count > 1, let low = values.min(), let high = values.max() {
+            if values.count > 1, let vMin = values.min(), let vMax = values.max() {
+                let low = min(vMin, baseline ?? vMin)
+                let high = max(vMax, baseline ?? vMax)
                 let range = max(high - low, .ulpOfOne)
-                Path { path in
-                    for (i, value) in values.enumerated() {
-                        let x = geo.size.width * CGFloat(i) / CGFloat(values.count - 1)
-                        let y = geo.size.height * (1 - CGFloat((value - low) / range))
-                        if i == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
+                let w = geo.size.width
+                let h = geo.size.height
+                let point: (Int) -> CGPoint = { i in
+                    CGPoint(x: w * CGFloat(i) / CGFloat(values.count - 1),
+                            y: 2 + (h - 4) * (1 - CGFloat((values[i] - low) / range)))
+                }
+                let line = Path { path in
+                    for i in values.indices {
+                        if i == 0 { path.move(to: point(i)) } else { path.addLine(to: point(i)) }
                     }
                 }
-                .stroke(Color.primary, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                ZStack(alignment: .topLeading) {
+                    if filled {
+                        Path { path in
+                            path.addPath(line)
+                            path.addLine(to: CGPoint(x: w, y: h))
+                            path.addLine(to: CGPoint(x: 0, y: h))
+                            path.closeSubpath()
+                        }
+                        .fill(Color.primary.opacity(0.07))
+                    }
+                    if let baseline {
+                        let y = 2 + (h - 4) * (1 - CGFloat((baseline - low) / range))
+                        Path { path in
+                            path.move(to: CGPoint(x: 0, y: y))
+                            path.addLine(to: CGPoint(x: w, y: y))
+                        }
+                        .stroke(Color.primary.opacity(0.35), style: StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
+                    }
+                    line.stroke(Color.primary, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+                    let end = point(values.count - 1)
+                    Circle().fill(Color.primary).frame(width: 5, height: 5)
+                        .position(end)
+                }
             }
         }
     }
@@ -2453,6 +2596,7 @@ struct WatchlistView: View {
                     }
                 }
             }
+            .listRowSpacing(8)
             .navigationTitle("Watchlist")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -2520,24 +2664,28 @@ struct WatchlistView: View {
 
     @ViewBuilder
     private func watchRow(_ item: WatchItem) -> some View {
-        if let quote = quotes[item.symbol] {
-            if let link = quote.link {
-                Link(destination: link) { QuoteRow(quote: quote) }
-                    .foregroundStyle(.primary)
-            } else {
-                QuoteRow(quote: quote)
-            }
-        } else {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.name).font(.headline).lineLimit(1)
-                    Text(item.symbol).font(.caption).foregroundStyle(.secondary)
+        Group {
+            if let quote = quotes[item.symbol] {
+                if let link = quote.link {
+                    Link(destination: link) { QuoteCard(quote: quote) }
+                        .foregroundStyle(.primary)
+                } else {
+                    QuoteCard(quote: quote)
                 }
-                Spacer()
-                ProgressView()
+            } else {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.name).font(.headline).lineLimit(1)
+                        Text(item.symbol).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    ProgressView()
+                }
+                .padding(14)
+                .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemGroupedBackground)))
             }
-            .padding(.vertical, 4)
         }
+        .cardRow()
     }
 
     private func contains(_ symbol: String) -> Bool {
