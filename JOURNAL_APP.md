@@ -220,7 +220,7 @@ On Appetize, notifications and location can behave differently from a real iPhon
 - **Tides** aren't shown: the free source isn't accurate enough near the shore.
 - **Reminder text** (for example "1,240 kcal so far") reflects what you'd logged when the app last scheduled reminders, which happens when you open or leave the app. iOS doesn't let a reminder fetch live surf or prices at the moment it appears.
 - **iOS keeps at most 64 upcoming reminders.** With everything on, this app schedules about 50 (a week of daily ones), and they're topped up each time you open the app.
-- **The web test version** (Journal Test App) doesn't have Surf, the market cards or Reminders yet, and uses sample weather, market and news data.
+- **The web test version** (Journal Test App in Claude) has every screen, including Surf, the market cards and Reminders with the timeline. It uses sample weather, swell, market and news data, and test reminders pop up as a preview at the top of the page instead of on a Lock Screen.
 
 ---
 
@@ -233,6 +233,6 @@ On Appetize, notifications and location can behave differently from a real iPhon
 | `1159f76` | Weather › Surf: South East Queensland swell forecast and custom breaks |
 | `4f7e141` | Markets: detail cards with chart under the name and ticker above the price |
 | `7cda3f7` | Daily report: Health moved first; surf at your breaks added to Reports |
-| `9c3222f` | Profile reminders: category cards, timeline window, notification replies and snooze |
+| `9c3222f` | Profile reminders: category cards, timeline window, notification replies and snooze | (build passed)
 
 A backup of the version before the five-tab navigation is in the IOS App project: `backups/JournalApp-v1-backup-2026-11-04.swift`.
