@@ -35,14 +35,25 @@ final class JournalEntry {
 
 @main
 struct JournalApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
+    /// All saved on-device. Shared so notification quick replies can save straight into it.
+    static let container: ModelContainer = {
+        do {
+            return try ModelContainer(for: JournalEntry.self, NewsFeed.self, SavedHeadline.self, UserProfile.self, WatchItem.self,
+                                      SurfBreak.self, Note.self, Reminder.self, Meal.self, SleepLog.self,
+                                      BankAccount.self, SavingsGoal.self, GoalDeposit.self, Expense.self, ReminderRule.self)
+        } catch {
+            fatalError("Couldn't open the app's storage: \(error)")
+        }
+    }()
+
     var body: some Scene {
         WindowGroup {
             RootView()
                 .tint(.primary)   // black and white theme: black in light mode, white in dark mode
         }
-        .modelContainer(for: [JournalEntry.self, NewsFeed.self, SavedHeadline.self, UserProfile.self, WatchItem.self, SurfBreak.self,
-                         Note.self, Reminder.self, Meal.self, SleepLog.self,
-                         BankAccount.self, SavingsGoal.self, GoalDeposit.self, Expense.self]) // all saved on-device
+        .modelContainer(JournalApp.container)
     }
 }
 
@@ -98,6 +109,14 @@ struct RootView: View {
                     now = .now
                     Task { await NewsSync.refresh(context: context) }
                 }
+                // Reschedule on open and on leaving, so "only if behind" reminders reflect what you've logged
+                if phase == .active || phase == .background {
+                    Task { await ReminderScheduler.reschedule(context) }
+                }
+            }
+            .task { await ReminderPlan.seedIfNeeded(context) }
+            .onReceive(AppRouter.shared.$request) { _ in
+                if let r = AppRouter.shared.take("root", where: { _ in true }) { tab = r.tab }
             }
     }
 
@@ -367,7 +386,7 @@ struct EntryEditorView: View {
     RootView()
         .modelContainer(for: [JournalEntry.self, NewsFeed.self, SavedHeadline.self, UserProfile.self, WatchItem.self, SurfBreak.self,
                          Note.self, Reminder.self, Meal.self, SleepLog.self,
-                         BankAccount.self, SavingsGoal.self, GoalDeposit.self, Expense.self], inMemory: true)
+                         BankAccount.self, SavingsGoal.self, GoalDeposit.self, Expense.self, ReminderRule.self], inMemory: true)
 }
 
 // MARK: - News: saved feeds
@@ -1300,6 +1319,7 @@ private struct ProfileForm: View {
             } footer: {
                 Text(appearanceNote)
             }
+            RemindersSection()
         }
         .onAppear {
             if let lat = profile.latitude, let lon = profile.longitude {
@@ -1519,6 +1539,9 @@ struct WeatherView: View {
             } else {
                 forecastSection
             }
+        }
+        .onReceive(AppRouter.shared.$request) { _ in
+            if AppRouter.shared.take("surf", where: { $0.tab == .reports && $0.detail == "surf" }) != nil { mode = "surf" }
         }
     }
 
@@ -2774,6 +2797,11 @@ struct JournalTab: View {
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Journal")
+            .onReceive(AppRouter.shared.$request) { _ in
+                if let r = AppRouter.shared.take("journal-tab", where: { $0.tab == .journal }), let match = JournalSection(rawValue: r.section) {
+                    section = match
+                }
+            }
         }
     }
 }
@@ -2792,6 +2820,11 @@ struct ReportsTab: View {
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Reports")
+            .onReceive(AppRouter.shared.$request) { _ in
+                if let r = AppRouter.shared.take("reports-tab", where: { $0.tab == .reports }), let match = ReportsSection(rawValue: r.section) {
+                    section = match
+                }
+            }
         }
     }
 }
@@ -2809,6 +2842,11 @@ struct HealthTab: View {
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Health")
+            .onReceive(AppRouter.shared.$request) { _ in
+                if let r = AppRouter.shared.take("health-tab", where: { $0.tab == .health }), let match = HealthSection(rawValue: r.section) {
+                    section = match
+                }
+            }
         }
     }
 }
@@ -2827,6 +2865,11 @@ struct FinanceTab: View {
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Finance")
+            .onReceive(AppRouter.shared.$request) { _ in
+                if let r = AppRouter.shared.take("finance-tab", where: { $0.tab == .finance }), let match = FinanceSection(rawValue: r.section) {
+                    section = match
+                }
+            }
         }
     }
 }
@@ -3347,6 +3390,9 @@ struct DietView: View {
                     .accessibilityLabel("Log a meal")
             }
         }
+        .onReceive(AppRouter.shared.$request) { _ in
+            if AppRouter.shared.take("Diet-add", where: { $0.section == "Diet" && $0.detail == "add" }) != nil { showingAdd = true }
+        }
         .sheet(isPresented: $showingAdd) { AddMealSheet(day: day).tint(.primary) }
         .sheet(isPresented: $showingTarget) { CalorieTargetSheet().tint(.primary).presentationDetents([.height(260)]) }
     }
@@ -3568,6 +3614,9 @@ struct SleepView: View {
                 Button { showingAdd = true } label: { Image(systemName: "plus") }
                     .accessibilityLabel("Log sleep")
             }
+        }
+        .onReceive(AppRouter.shared.$request) { _ in
+            if AppRouter.shared.take("Sleep-add", where: { $0.section == "Sleep" && $0.detail == "add" }) != nil { showingAdd = true }
         }
         .sheet(isPresented: $showingAdd) { AddSleepSheet().tint(.primary) }
     }
@@ -4074,6 +4123,9 @@ struct ExpensesView: View {
                 Button { showingAdd = true } label: { Image(systemName: "plus") }
                     .accessibilityLabel("Log an expense")
             }
+        }
+        .onReceive(AppRouter.shared.$request) { _ in
+            if AppRouter.shared.take("Expenses-add", where: { $0.section == "Expenses" && $0.detail == "add" }) != nil { showingAdd = true }
         }
         .sheet(isPresented: $showingAdd) { ExpenseSheet().tint(.primary) }
     }
@@ -5589,5 +5641,817 @@ struct ManageBreaksView: View {
         customName = ""
         query = ""
         self.picked = nil
+    }
+}
+
+// MARK: - Reminders: notification routing (tap a reminder → open the right screen)
+
+final class AppRouter: ObservableObject {
+    static let shared = AppRouter()
+
+    struct Route: Equatable {
+        let id = UUID()
+        let tab: AppTab
+        let section: String       // a section's raw value, e.g. "Diet", "Savings", "Weather"
+        let detail: String?       // "add" opens the add sheet, "surf" opens Weather › Surf
+    }
+
+    @Published var request: Route?
+    private var used: Set<String> = []
+
+    func go(_ tab: AppTab, _ section: String, _ detail: String? = nil) {
+        request = Route(tab: tab, section: section, detail: detail)
+    }
+
+    /// Hands the current route to one screen, once.
+    func take(_ who: String, where match: (Route) -> Bool) -> Route? {
+        guard let r = request, match(r) else { return nil }
+        let key = "\(r.id)-\(who)"
+        guard !used.contains(key) else { return nil }
+        used.insert(key)
+        return r
+    }
+}
+
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.setNotificationCategories(ReminderPlan.notificationCategories)
+        return true
+    }
+
+    // Show reminders even while the app is open
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .list, .sound])
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let content = response.notification.request.content
+        let rule = content.userInfo["rule"] as? String ?? ""
+        let action = response.actionIdentifier
+        let typed = (response as? UNTextInputNotificationResponse)?.userText
+        Task { @MainActor in
+            await ReminderActions.handle(rule: rule, action: action, text: typed, content: content)
+            completionHandler()
+        }
+    }
+}
+
+@MainActor
+enum ReminderActions {
+    static func handle(rule: String, action: String, text: String?, content: UNNotificationContent) async {
+        let context = JournalApp.container.mainContext
+        switch action {
+        case "SNOOZE":
+            guard let copy = content.mutableCopy() as? UNMutableNotificationContent else { return }
+            let request = UNNotificationRequest(identifier: "snooze-\(UUID().uuidString)", content: copy,
+                                                trigger: UNTimeIntervalNotificationTrigger(timeInterval: 3600, repeats: false))
+            try? await UNUserNotificationCenter.current().add(request)
+        case "REPLY":
+            guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return }
+            if rule == "journal" {
+                context.insert(JournalEntry(title: "Quick note", body: text, createdAt: .now))
+            } else if rule == "spending", let spend = parseSpend(text) {
+                context.insert(Expense(title: spend.title, amount: spend.amount, category: spend.category, date: .now))
+            } else {
+                return
+            }
+            try? context.save()
+            await ReminderScheduler.reschedule(context)
+        default:
+            open(rule)
+        }
+    }
+
+    static func open(_ rule: String) {
+        let router = AppRouter.shared
+        switch rule {
+        case "sleep": router.go(.health, HealthSection.sleep.rawValue, "add")
+        case "meals": router.go(.health, HealthSection.diet.rawValue, "add")
+        case "journal": router.go(.journal, JournalSection.entries.rawValue)
+        case "surf": router.go(.reports, ReportsSection.weather.rawValue, "surf")
+        case "watchlist": router.go(.reports, ReportsSection.markets.rawValue)
+        case "spending": router.go(.finance, FinanceSection.expenses.rawValue, "add")
+        case "balances": router.go(.finance, FinanceSection.savings.rawValue)
+        case "goals": router.go(.finance, FinanceSection.goals.rawValue)
+        default: router.go(.journal, JournalSection.reminders.rawValue)   // your own to-do reminders
+        }
+    }
+
+    /// "18.50 lunch" → $18.50, "lunch", Food
+    static func parseSpend(_ text: String) -> (amount: Double, title: String, category: String)? {
+        guard let range = text.range(of: #"\$?\s*\d+(?:[.,]\d{1,2})?"#, options: .regularExpression) else { return nil }
+        let digits = text[range].filter { "0123456789.,".contains($0) }.replacingOccurrences(of: ",", with: ".")
+        guard let amount = Double(digits), amount > 0 else { return nil }
+        var title = text.replacingCharacters(in: range, with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.isEmpty { title = "Spending" }
+        let lower = title.lowercased()
+        let guesses: [(String, [String])] = [
+            (ExpenseCategory.food.rawValue, ["lunch", "dinner", "breakfast", "coffee", "cafe", "takeaway", "food", "brekkie"]),
+            (ExpenseCategory.groceries.rawValue, ["groceries", "woolies", "woolworths", "coles", "aldi", "iga"]),
+            (ExpenseCategory.transport.rawValue, ["fuel", "petrol", "uber", "train", "bus", "parking", "toll", "go card"]),
+            (ExpenseCategory.bills.rawValue, ["bill", "rent", "power", "phone", "internet", "insurance"]),
+            (ExpenseCategory.health.rawValue, ["chemist", "pharmacy", "doctor", "gym", "physio"]),
+            (ExpenseCategory.fun.rawValue, ["movie", "drinks", "pub", "concert", "game"])
+        ]
+        let category = guesses.first { $0.1.contains { lower.contains($0) } }?.0 ?? ExpenseCategory.other.rawValue
+        return (amount, title.prefix(1).uppercased() + title.dropFirst(), category)
+    }
+}
+
+// MARK: - Reminders: rules and planning
+
+enum ReminderKind: String {
+    case log, check, behind
+    var label: String {
+        switch self {
+        case .log: return "Log it"
+        case .check: return "Check & update"
+        case .behind: return "Only if behind"
+        }
+    }
+}
+
+/// One reminder you can switch on in Profile.
+@Model
+final class ReminderRule {
+    var key: String
+    var category: String
+    var title: String
+    var kindRaw: String
+    var frequency: String      // daily, weekdays, weekly, monthly
+    var hour: Int
+    var minute: Int
+    var weekday: Int           // 1 = Sunday … 7 = Saturday (weekly)
+    var monthDay: Int          // 1–28 (monthly)
+    var isOn: Bool
+    var order: Int
+
+    init(key: String, category: String, title: String, kind: ReminderKind, frequency: String,
+         hour: Int, minute: Int, weekday: Int = 1, monthDay: Int = 1, isOn: Bool, order: Int) {
+        self.key = key
+        self.category = category
+        self.title = title
+        self.kindRaw = kind.rawValue
+        self.frequency = frequency
+        self.hour = hour
+        self.minute = minute
+        self.weekday = weekday
+        self.monthDay = monthDay
+        self.isOn = isOn
+        self.order = order
+    }
+
+    var kind: ReminderKind { ReminderKind(rawValue: kindRaw) ?? .log }
+}
+
+enum ReminderPlan {
+    static let categories = ["Health", "Journal", "Reports", "Finance"]
+
+    static func categoryIcon(_ category: String) -> String {
+        switch category {
+        case "Health": return "heart"
+        case "Journal": return "book"
+        case "Reports": return "chart.bar.doc.horizontal"
+        default: return "creditcard"
+        }
+    }
+
+    static func icon(_ key: String) -> String {
+        switch key {
+        case "sleep": return "bed.double"
+        case "meals": return "fork.knife"
+        case "journal": return "square.and.pencil"
+        case "surf": return "water.waves"
+        case "watchlist": return "chart.line.uptrend.xyaxis"
+        case "spending": return "receipt"
+        case "balances": return "building.columns"
+        default: return "target"
+        }
+    }
+
+    private static let presets: [(key: String, category: String, title: String, kind: ReminderKind, frequency: String,
+                                  hour: Int, minute: Int, weekday: Int, monthDay: Int, isOn: Bool)] = [
+        ("sleep", "Health", "How did you sleep?", .log, "daily", 7, 0, 1, 1, true),
+        ("meals", "Health", "Log today's meals", .log, "daily", 19, 30, 1, 1, true),
+        ("journal", "Journal", "Write today's entry", .behind, "daily", 21, 0, 1, 1, true),
+        ("surf", "Reports", "Morning surf and weather", .check, "daily", 5, 15, 1, 1, true),
+        ("watchlist", "Reports", "Watchlist at the close", .check, "weekdays", 16, 15, 1, 1, false),
+        ("spending", "Finance", "Log today's spending", .log, "daily", 20, 0, 1, 1, true),
+        ("balances", "Finance", "Update account balances", .check, "weekly", 18, 0, 1, 1, true),
+        ("goals", "Finance", "Goal check-in", .behind, "monthly", 18, 0, 1, 1, false)
+    ]
+
+    @MainActor
+    static func seedIfNeeded(_ context: ModelContext) {
+        let existing = Set(((try? context.fetch(FetchDescriptor<ReminderRule>())) ?? []).map(\.key))
+        for (i, p) in presets.enumerated() where !existing.contains(p.key) {
+            context.insert(ReminderRule(key: p.key, category: p.category, title: p.title, kind: p.kind, frequency: p.frequency,
+                                        hour: p.hour, minute: p.minute, weekday: p.weekday, monthDay: p.monthDay,
+                                        isOn: p.isOn, order: i))
+        }
+    }
+
+    static func matches(_ rule: ReminderRule, day: Date) -> Bool {
+        let cal = Calendar.current
+        let weekday = cal.component(.weekday, from: day)
+        switch rule.frequency {
+        case "weekdays": return (2...6).contains(weekday)
+        case "weekly": return weekday == rule.weekday
+        case "monthly": return cal.component(.day, from: day) == min(max(rule.monthDay, 1), 28)
+        default: return true
+        }
+    }
+
+    static func fireTime(_ rule: ReminderRule, on day: Date) -> Date? {
+        Calendar.current.date(bySettingHour: rule.hour, minute: rule.minute, second: 0, of: day)
+    }
+
+    /// The next few times this reminder goes off (a week of daily ones, a month of weekly ones, two monthly ones).
+    static func occurrences(of rule: ReminderRule, from now: Date) -> [Date] {
+        let cal = Calendar.current
+        let limit = rule.frequency == "monthly" ? 2 : rule.frequency == "weekly" ? 4 : 7
+        var out: [Date] = []
+        var day = cal.startOfDay(for: now)
+        var checked = 0
+        while out.count < limit && checked < 70 {
+            checked += 1
+            if matches(rule, day: day), let fire = fireTime(rule, on: day), fire > now { out.append(fire) }
+            guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return out
+    }
+
+    /// Have you already done this reminder's task for the day (or week/month) of `fire`?
+    @MainActor
+    static func isDone(_ key: String, at fire: Date, _ context: ModelContext) -> Bool {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: fire)
+        let end = cal.date(byAdding: .day, value: 1, to: start) ?? fire
+        switch key {
+        case "journal":
+            return ((try? context.fetchCount(FetchDescriptor<JournalEntry>(predicate: #Predicate { $0.createdAt >= start && $0.createdAt < end }))) ?? 0) > 0
+        case "meals":
+            return ((try? context.fetchCount(FetchDescriptor<Meal>(predicate: #Predicate { $0.date >= start && $0.date < end }))) ?? 0) > 0
+        case "sleep":
+            return ((try? context.fetchCount(FetchDescriptor<SleepLog>(predicate: #Predicate { $0.day == start }))) ?? 0) > 0
+        case "spending":
+            return ((try? context.fetchCount(FetchDescriptor<Expense>(predicate: #Predicate { $0.date >= start && $0.date < end }))) ?? 0) > 0
+        case "balances":
+            let recent = fire.addingTimeInterval(-6 * 86400)
+            return ((try? context.fetchCount(FetchDescriptor<BankAccount>(predicate: #Predicate { $0.updatedAt >= recent }))) ?? 0) > 0
+        case "goals":
+            let month = cal.startOfMonth(for: fire)
+            return ((try? context.fetchCount(FetchDescriptor<GoalDeposit>(predicate: #Predicate { $0.date >= month }))) ?? 0) > 0
+        default:
+            return false
+        }
+    }
+
+    @MainActor
+    static func body(for rule: ReminderRule, at fire: Date, _ context: ModelContext) -> String {
+        let cal = Calendar.current
+        switch rule.key {
+        case "sleep":
+            return "Tap to log last night's sleep."
+        case "meals":
+            let start = cal.startOfDay(for: fire)
+            let end = cal.date(byAdding: .day, value: 1, to: start) ?? fire
+            let meals = (try? context.fetch(FetchDescriptor<Meal>(predicate: #Predicate { $0.date >= start && $0.date < end }))) ?? []
+            let kcal = meals.reduce(0) { $0 + $1.calories }
+            return kcal > 0 ? "You've logged \(kcal.formatted()) kcal so far today. Tap to add more." : "Tap to log what you had today."
+        case "journal":
+            return "Reply with a line about your day, or tap to open your journal."
+        case "surf":
+            let names = ((try? context.fetch(FetchDescriptor<SurfBreak>(sortBy: [SortDescriptor(\.addedAt)]))) ?? []).prefix(2).map(\.name)
+            return names.isEmpty ? "Tap to see today's forecast and swell."
+                : "Tap to see the swell at \(names.joined(separator: " and ")) and today's forecast."
+        case "watchlist":
+            return "See how your watchlist closed today."
+        case "spending":
+            return "Reply with an amount and what it was for, e.g. 18.50 lunch."
+        case "balances":
+            let accounts = (try? context.fetch(FetchDescriptor<BankAccount>())) ?? []
+            guard let latest = accounts.map(\.updatedAt).max() else { return "Add your accounts to keep track of your balances." }
+            let days = cal.dateComponents([.day], from: latest, to: fire).day ?? 0
+            return "Last updated \(countText(max(days, 0), "day", "days")) ago. Tap to update."
+        default:
+            let goals = (try? context.fetch(FetchDescriptor<SavingsGoal>(sortBy: [SortDescriptor(\.createdAt)]))) ?? []
+            if let g = goals.first(where: { $0.saved < $0.target }) {
+                return "\(g.name) is at \(Int((g.progress * 100).rounded()))%. Tap to add money."
+            }
+            return "Tap to check in on your savings goals."
+        }
+    }
+
+    static func categoryID(for key: String) -> String {
+        switch key {
+        case "sleep": return "LOG_SLEEP"
+        case "meals": return "LOG_MEAL"
+        case "journal": return "JOURNAL_LINE"
+        case "spending": return "SPEND"
+        default: return "CHECK"
+        }
+    }
+
+    /// Buttons and reply boxes shown when you long-press or expand a reminder.
+    static var notificationCategories: Set<UNNotificationCategory> {
+        let snooze = UNNotificationAction(identifier: "SNOOZE", title: "In 1 hour", options: [])
+        let open: (String) -> UNNotificationAction = { UNNotificationAction(identifier: "OPEN", title: $0, options: [.foreground]) }
+        return [
+            UNNotificationCategory(identifier: "LOG_SLEEP", actions: [open("Log sleep"), snooze], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "LOG_MEAL", actions: [open("Log a meal"), snooze], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "JOURNAL_LINE", actions: [
+                UNTextInputNotificationAction(identifier: "REPLY", title: "Write a line", options: [],
+                                              textInputButtonTitle: "Save", textInputPlaceholder: "How was today?"),
+                open("Open journal"), snooze
+            ], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "SPEND", actions: [
+                UNTextInputNotificationAction(identifier: "REPLY", title: "Add spending", options: [],
+                                              textInputButtonTitle: "Add", textInputPlaceholder: "18.50 lunch"),
+                open("Open expenses"), snooze
+            ], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "CHECK", actions: [open("Open"), snooze], intentIdentifiers: [])
+        ]
+    }
+
+    @MainActor
+    static func content(for rule: ReminderRule, at fire: Date, _ context: ModelContext) -> UNMutableNotificationContent {
+        let c = UNMutableNotificationContent()
+        c.title = rule.title
+        c.body = body(for: rule, at: fire, context)
+        c.sound = .default
+        c.categoryIdentifier = categoryID(for: rule.key)
+        c.threadIdentifier = rule.category
+        c.userInfo = ["rule": rule.key]
+        return c
+    }
+}
+
+@MainActor
+enum ReminderScheduler {
+    private static let prefix = "rule-"
+
+    static func status() async -> UNAuthorizationStatus {
+        await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+
+    static func requestPermission() async -> Bool {
+        (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])) ?? false
+    }
+
+    /// Clears and re-adds every reminder for the coming days, skipping "only if behind" ones you've already done.
+    static func reschedule(_ context: ModelContext) async {
+        let center = UNUserNotificationCenter.current()
+        let pending = await center.pendingNotificationRequests()
+        center.removePendingNotificationRequests(withIdentifiers: pending.map(\.identifier).filter { $0.hasPrefix(prefix) })
+        let auth = await status()
+        guard auth == .authorized || auth == .provisional else { return }
+        let rules = (try? context.fetch(FetchDescriptor<ReminderRule>())) ?? []
+        let now = Date.now
+        for rule in rules where rule.isOn {
+            for fire in ReminderPlan.occurrences(of: rule, from: now) {
+                if rule.kind == .behind && ReminderPlan.isDone(rule.key, at: fire, context) { continue }
+                let parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: fire)
+                let request = UNNotificationRequest(identifier: "\(prefix)\(rule.key)-\(Int(fire.timeIntervalSince1970))",
+                                                    content: ReminderPlan.content(for: rule, at: fire, context),
+                                                    trigger: UNCalendarNotificationTrigger(dateMatching: parts, repeats: false))
+                try? await center.add(request)
+            }
+        }
+    }
+
+    /// Sends this reminder in 5 seconds so you can see how it looks.
+    static func sendTest(_ rule: ReminderRule, _ context: ModelContext) async {
+        let request = UNNotificationRequest(identifier: "test-\(UUID().uuidString)",
+                                            content: ReminderPlan.content(for: rule, at: .now, context),
+                                            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 5, repeats: false))
+        try? await UNUserNotificationCenter.current().add(request)
+    }
+}
+
+// MARK: - Reminders: Profile section (category cards)
+
+struct ReminderTag: View {
+    let kind: ReminderKind
+    var body: some View {
+        Text(kind.label.uppercased())
+            .font(.system(size: 10, weight: .bold))
+            .tracking(0.4)
+            .foregroundStyle(kind == .log ? Color(.systemBackground) : Color.primary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background { if kind == .log { Capsule().fill(Color.primary) } }
+            .overlay { if kind != .log { Capsule().stroke(Color.primary, lineWidth: 1) } }
+    }
+}
+
+struct RemindersSection: View {
+    @Environment(\.modelContext) private var context
+    @Query(sort: \ReminderRule.order) private var rules: [ReminderRule]
+    @State private var open: Set<String> = []
+    @State private var showingTimeline = false
+    @State private var auth: UNAuthorizationStatus = .notDetermined
+    @State private var sentNote: String?
+
+    /// Changes whenever any setting changes, to trigger a reschedule.
+    private var signature: String {
+        rules.map { "\($0.key)\($0.isOn)\($0.frequency)\($0.hour):\($0.minute)/\($0.weekday)/\($0.monthDay)" }.joined(separator: "|")
+    }
+
+    var body: some View {
+        Section {
+            if auth == .denied {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Notifications are turned off for this app, so reminders can't appear.")
+                        .font(.subheadline)
+                    Button("Open Settings") {
+                        if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(CapsuleButtonStyle())
+                }
+                .padding(.vertical, 4)
+            } else if auth == .notDetermined {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Allow notifications so your reminders can pop up on your Lock Screen.")
+                        .font(.subheadline)
+                    Button("Turn on reminders") { Task { await askAndSchedule() } }
+                        .buttonStyle(CapsuleButtonStyle())
+                }
+                .padding(.vertical, 4)
+            }
+
+            ForEach(ReminderPlan.categories, id: \.self) { category in
+                ReminderCategoryCard(category: category,
+                                     rules: rules.filter { $0.category == category },
+                                     isOpen: Binding(get: { open.contains(category) },
+                                                     set: { if $0 { open.insert(category) } else { open.remove(category) } }),
+                                     sentNote: sentNote == category ? "Sent. It will pop up in about 5 seconds." : nil,
+                                     onTest: { rule in Task { await test(rule) } })
+            }
+        } header: {
+            HStack {
+                Text("Reminders")
+                Spacer()
+                Button { showingTimeline = true } label: {
+                    Label("Timeline", systemImage: "calendar.day.timeline.left").labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(CapsuleButtonStyle(kind: .outlined))
+                .textCase(nil)
+            }
+            // Attached to the header (a single view) so they run once, not once per row
+            .task {
+                await ReminderPlan.seedIfNeeded(context)
+                auth = await ReminderScheduler.status()
+            }
+            .onChange(of: signature) {
+                Task {
+                    if auth == .notDetermined && rules.contains(where: \.isOn) {
+                        await askAndSchedule()
+                    } else {
+                        await ReminderScheduler.reschedule(context)
+                    }
+                }
+            }
+            .sheet(isPresented: $showingTimeline) {
+                ReminderTimelineView { category in open.insert(category) }
+                    .tint(.primary)
+            }
+        } footer: {
+            Text("Reminders appear on your Lock Screen and in Notification Centre. Long-press one to reply or snooze.")
+        }
+    }
+
+    private func askAndSchedule() async {
+        _ = await ReminderScheduler.requestPermission()
+        auth = await ReminderScheduler.status()
+        await ReminderScheduler.reschedule(context)
+    }
+
+    private func test(_ rule: ReminderRule) async {
+        if auth != .authorized && auth != .provisional { await askAndSchedule() }
+        guard auth == .authorized || auth == .provisional else { return }
+        await ReminderScheduler.sendTest(rule, context)
+        sentNote = rule.category
+    }
+}
+
+struct ReminderCategoryCard: View {
+    let category: String
+    let rules: [ReminderRule]
+    @Binding var isOpen: Bool
+    let sentNote: String?
+    let onTest: (ReminderRule) -> Void
+
+    private var summary: String {
+        let on = rules.filter(\.isOn)
+        guard !on.isEmpty else { return "All off" }
+        return on.map { "\($0.title) · \(ReminderCategoryCard.when($0))" }.joined(separator: "\n")
+    }
+
+    static func when(_ r: ReminderRule) -> String {
+        let time = (ReminderPlan.fireTime(r, on: .now) ?? .now).formatted(date: .omitted, time: .shortened)
+        switch r.frequency {
+        case "weekdays": return "Weekdays \(time)"
+        case "weekly": return "\(Calendar.current.weekdaySymbols[max(0, min(6, r.weekday - 1))]) \(time)"
+        case "monthly": return "Monthly, \(r.monthDay.formatted(.number))\(ordinal(r.monthDay)) \(time)"
+        default: return time
+        }
+    }
+
+    static func ordinal(_ n: Int) -> String {
+        if (11...13).contains(n % 100) { return "th" }
+        switch n % 10 { case 1: return "st"; case 2: return "nd"; case 3: return "rd"; default: return "th" }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button { withAnimation(.easeInOut(duration: 0.2)) { isOpen.toggle() } } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Image(systemName: ReminderPlan.categoryIcon(category))
+                        Text(category).font(.headline)
+                        Spacer()
+                        Text("\(rules.filter(\.isOn).count) of \(rules.count) on")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .rotationEffect(.degrees(isOpen ? 180 : 0))
+                    }
+                    if !isOpen {
+                        Text(summary).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isOpen {
+                ForEach(rules) { rule in
+                    Divider()
+                    ReminderRuleEditor(rule: rule)
+                }
+                Divider()
+                Button {
+                    if let rule = rules.first(where: \.isOn) ?? rules.first { onTest(rule) }
+                } label: {
+                    Label("Send a test reminder", systemImage: "bell.badge").labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(CapsuleButtonStyle(kind: .outlined))
+                if let sentNote {
+                    Text(sentNote).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+struct ReminderRuleEditor: View {
+    @Bindable var rule: ReminderRule
+
+    private var time: Binding<Date> {
+        Binding(get: { ReminderPlan.fireTime(rule, on: .now) ?? .now },
+                set: { date in
+                    let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+                    rule.hour = parts.hour ?? rule.hour
+                    rule.minute = parts.minute ?? rule.minute
+                })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(isOn: $rule.isOn) {
+                Label(rule.title, systemImage: ReminderPlan.icon(rule.key))
+                    .font(.subheadline.weight(.semibold))
+            }
+            .tint(.primary)
+
+            if rule.isOn {
+                MonoSegment(options: [("daily", "Daily"), ("weekdays", "Weekdays"), ("weekly", "Weekly"), ("monthly", "Monthly")],
+                            selection: $rule.frequency)
+                HStack(spacing: 8) {
+                    ReminderTag(kind: rule.kind)
+                    Spacer()
+                    if rule.frequency == "weekly" {
+                        Picker("Day", selection: $rule.weekday) {
+                            ForEach(1...7, id: \.self) { d in Text(Calendar.current.weekdaySymbols[d - 1]).tag(d) }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                    }
+                    if rule.frequency == "monthly" {
+                        Picker("Day of month", selection: $rule.monthDay) {
+                            ForEach(1...28, id: \.self) { d in Text("\(d)\(ReminderCategoryCard.ordinal(d))").tag(d) }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                    }
+                    DatePicker("Time", selection: time, displayedComponents: .hourAndMinute)
+                        .labelsHidden()
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Reminders: timeline window (Today and This week)
+
+struct ReminderTimelineView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Query(sort: \ReminderRule.order) private var rules: [ReminderRule]
+    let onSelect: (String) -> Void
+    @State private var mode = "today"
+
+    private let cal = Calendar.current
+
+    private var today: [(rule: ReminderRule, fire: Date)] {
+        let day = cal.startOfDay(for: .now)
+        return rules.filter { $0.isOn && ReminderPlan.matches($0, day: day) }
+            .compactMap { r in ReminderPlan.fireTime(r, on: day).map { (rule: r, fire: $0) } }
+            .sorted { $0.fire < $1.fire }
+    }
+
+    private var days: [Date] {
+        (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: cal.startOfDay(for: .now)) }
+    }
+
+    private var weekRules: [ReminderRule] {
+        rules.filter { r in r.isOn && days.contains { ReminderPlan.matches(r, day: $0) } }
+            .sorted { ($0.hour, $0.minute) < ($1.hour, $1.minute) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    MonoSegment(options: [("today", "Today"), ("week", "This week")], selection: $mode)
+                    if mode == "today" { todayView } else { weekView }
+                }
+                .padding()
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Reminder timeline")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.buttonStyle(CapsuleButtonStyle()) }
+            }
+        }
+    }
+
+    // Today
+
+    @ViewBuilder
+    private var todayView: some View {
+        let items = today
+        let now = Date.now
+        Text("\(Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide))) · \(countText(items.count, "reminder", "reminders"))")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        if items.isEmpty {
+            ContentUnavailableView("No reminders today", systemImage: "bell.slash",
+                                   description: Text("Turn reminders on in Profile to see them here."))
+        } else {
+            let nowIndex = items.firstIndex { $0.fire > now } ?? items.count
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.rule.key) { index, item in
+                    if index == nowIndex { nowLine(now) }
+                    timelineRow(item.rule, item.fire, past: item.fire <= now)
+                }
+                if nowIndex == items.count { nowLine(now) }
+            }
+            Text("Tap a reminder to change it.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func nowLine(_ now: Date) -> some View {
+        HStack(spacing: 8) {
+            Text(now.formatted(date: .omitted, time: .shortened))
+                .font(.caption.weight(.heavy).monospacedDigit())
+                .frame(width: 64, alignment: .trailing)
+            Circle().fill(Color.primary).frame(width: 9, height: 9)
+            Rectangle().fill(Color.primary).frame(height: 1.5)
+            Text("NOW")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(Color(.systemBackground))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(Capsule().fill(Color.primary))
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func timelineRow(_ rule: ReminderRule, _ fire: Date, past: Bool) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(fire.formatted(date: .omitted, time: .shortened))
+                .font(.caption.weight(.bold).monospacedDigit())
+                .frame(width: 64, alignment: .trailing)
+                .padding(.top, 14)
+            VStack(spacing: 0) {
+                Rectangle().fill(Color.primary.opacity(0.15)).frame(width: 1.5, height: 14)
+                Circle()
+                    .fill(past ? Color(.systemGroupedBackground) : Color.primary)
+                    .overlay(Circle().stroke(Color.primary, lineWidth: 1.5))
+                    .frame(width: 10, height: 10)
+                Rectangle().fill(Color.primary.opacity(0.15)).frame(width: 1.5).frame(maxHeight: .infinity)
+            }
+            .frame(width: 10)
+            Button {
+                onSelect(rule.category)
+                dismiss()
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Image(systemName: ReminderPlan.icon(rule.key))
+                        Text(rule.title).font(.subheadline.weight(.semibold))
+                        Spacer()
+                        if past { Image(systemName: "checkmark") }
+                    }
+                    HStack(spacing: 6) {
+                        Text(rule.category).font(.caption).foregroundStyle(.secondary)
+                        ReminderTag(kind: rule.kind)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 14).fill(Color(.secondarySystemGroupedBackground)))
+                .contentShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 8)
+        }
+        .opacity(past ? 0.45 : 1)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // This week
+
+    @ViewBuilder
+    private var weekView: some View {
+        let list = weekRules
+        if list.isEmpty {
+            ContentUnavailableView("No reminders this week", systemImage: "bell.slash",
+                                   description: Text("Turn reminders on in Profile to see them here."))
+        } else {
+            Grid(horizontalSpacing: 4, verticalSpacing: 4) {
+                GridRow {
+                    Text("")
+                    ForEach(days.indices, id: \.self) { i in
+                        Text(days[i].formatted(.dateTime.weekday(.abbreviated)))
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(i == 0 ? Color(.systemBackground) : Color.primary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 2)
+                            .background { if i == 0 { Capsule().fill(Color.primary) } }
+                    }
+                }
+                ForEach(list) { rule in
+                    GridRow {
+                        Text((ReminderPlan.fireTime(rule, on: .now) ?? .now).formatted(date: .omitted, time: .shortened))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .gridColumnAlignment(.trailing)
+                        ForEach(days.indices, id: \.self) { i in
+                            let due = ReminderPlan.matches(rule, day: days[i])
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(due ? Color.primary : Color.primary.opacity(0.07))
+                                .frame(height: 28)
+                                .overlay(
+                                    Image(systemName: ReminderPlan.icon(rule.key))
+                                        .font(.caption2)
+                                        .foregroundStyle(due ? Color(.systemBackground) : Color.primary.opacity(0.25))
+                                )
+                                .accessibilityLabel("\(rule.title), \(due ? "due" : "not due")")
+                        }
+                    }
+                }
+            }
+
+            let counts = days.map { d in list.filter { ReminderPlan.matches($0, day: d) }.count }
+            let total = counts.reduce(0, +)
+            let busiest = counts.indices.max { counts[$0] < counts[$1] } ?? 0
+            VStack(alignment: .leading, spacing: 4) {
+                Text("This week").font(.headline)
+                Text("\(countText(total, "reminder", "reminders")) · busiest day \(days[busiest].formatted(.dateTime.weekday(.wide))) (\(counts[busiest]))")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text("Faded squares aren't due that day.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemGroupedBackground)))
+        }
     }
 }
